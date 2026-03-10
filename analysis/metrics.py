@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 # Helpers
 # ---------------------------------------------------------------------------
 
-ELEPHANT_THRESHOLD = 1_000_000  # 1 MB in bytes
+ELEPHANT_THRESHOLD = 50 * 1024 * 1024  # 50 MB — actual elephants are ~108 MB
 
 
 def parse_ns3_time(time_str):
@@ -111,6 +111,10 @@ def classify_flows(df):
             return "ack-only"
         elif row["txBytes"] > ELEPHANT_THRESHOLD:
             return "elephant"
+        elif row["fct_s"] > 0.4:
+            # Medium-sized, long-running flow = reverse TCP ACK stream for an
+            # elephant (e.g. ~1.88 MB over ~0.87s). Exclude from both plots.
+            return "ack-only"
         else:
             return "mouse"
 
