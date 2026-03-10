@@ -1,4 +1,7 @@
-results/
+results-ecmp/
+results-ecmp-scaled/
+results-hedera/
+results-comparison/
 .worktrees/
 __pycache__/
 *.pyc

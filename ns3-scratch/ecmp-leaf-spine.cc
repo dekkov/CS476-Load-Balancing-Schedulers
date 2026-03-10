@@ -98,7 +98,7 @@ main(int argc, char* argv[])
 {
     // --- Command-line arguments ---
     uint32_t ecmpMode = 2; // 0=none, 1=random, 2=flow-hash
-    std::string outputDir = "results";
+    std::string outputDir = "results-ecmp";
 
     CommandLine cmd;
     cmd.AddValue("ecmpMode", "ECMP mode: 0=none, 1=random, 2=flow-hash", ecmpMode);

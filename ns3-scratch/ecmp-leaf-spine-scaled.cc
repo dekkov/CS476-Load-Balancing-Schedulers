@@ -83,7 +83,7 @@ int
 main(int argc, char* argv[])
 {
     uint32_t ecmpMode = 2;
-    std::string outputDir = "results";
+    std::string outputDir = "results-ecmp-scaled";
 
     CommandLine cmd;
     cmd.AddValue("ecmpMode", "ECMP mode: 0=none, 1=random, 2=flow-hash", ecmpMode);

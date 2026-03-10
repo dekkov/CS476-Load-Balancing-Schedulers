@@ -1,10 +1,10 @@
 # CS476 — Load-Balancing Schedulers in Cloud Datacenters
 
-ns-3 simulation comparing load-balancing strategies on a leaf-spine datacenter topology. Currently implements **ECMP (Equal-Cost Multi-Path)** routing with per-flow hashing. CONGA will be added in a future phase.
+ns-3 simulation comparing load-balancing strategies on a leaf-spine datacenter topology. Implements **ECMP (Equal-Cost Multi-Path)** routing with per-flow hashing and **Hedera** with a centralized controller that detects elephant flows and reroutes them via Global First Fit.
 
 ## Problem
 
-Static hash-based load balancing (ECMP) can cause **hash collisions** where multiple elephant flows map to the same spine link, starving co-located mice flows. This simulation measures that effect and quantifies the impact on flow completion time (FCT) and throughput.
+Static hash-based load balancing (ECMP) can cause **hash collisions** where multiple elephant flows map to the same spine link, starving co-located mice flows. Hedera addresses this by periodically detecting elephant flows and rerouting them to less-loaded spines. This simulation measures both approaches and quantifies the impact on flow completion time (FCT), throughput, and path distribution.
 
 ## Topology
 
@@ -30,125 +30,189 @@ Static hash-based load balancing (ECMP) can cause **hash collisions** where mult
 | Host-Leaf | `10.<leaf>.<host_local_idx>.0/24` | host0-leaf0: `10.0.0.0/24` (host=.1, leaf=.2) |
 | Leaf-Spine | `10.10.<link_id>.0/24` | leaf0-spine0: `10.10.0.0/24` |
 
-## Traffic Pattern
-
-### Elephant Flows (2 flows, 100 MB each, start at t=0.5s)
-
-| Flow | Source | Destination | Port |
-|------|--------|-------------|------|
-| E1 | host0 (leaf0) | host4 (leaf2) | 9 |
-| E2 | host1 (leaf0) | host6 (leaf3) | 9 |
-
-### Mice Flows (8 flows, 100 KB each, staggered start)
-
-| Flow | Source | Destination | Port | Start |
-|------|--------|-------------|------|-------|
-| M1 | host2 (leaf1) | host5 (leaf2) | 11 | 1.0s |
-| M2 | host3 (leaf1) | host7 (leaf3) | 12 | 1.0s |
-| M3 | host4 (leaf2) | host1 (leaf0) | 13 | 1.0s |
-| M4 | host5 (leaf2) | host0 (leaf0) | 14 | 1.0s |
-| M5 | host6 (leaf3) | host3 (leaf1) | 15 | 1.1s |
-| M6 | host7 (leaf3) | host2 (leaf1) | 16 | 1.1s |
-| M7 | host0 (leaf0) | host7 (leaf3) | 17 | 1.2s |
-| M8 | host1 (leaf0) | host5 (leaf2) | 18 | 1.2s |
-
-All flows use TCP (Cubic, MSS=1448) via `BulkSendApplication`. Simulation runs for **12 seconds**.
-
 ## Prerequisites
 
 - **OS**: Ubuntu/Debian (tested on WSL2)
 - **Build tools**: g++, cmake, ninja-build, git
-- **Python 3** with pip
+- **Python 3** with pip (pandas, matplotlib)
 - **Disk**: ~2 GB for ns-3 build
 
 ## Quick Start
 
 ```bash
-# 1. Install ns-3 and dependencies
+# 1. Install ns-3 and dependencies (one-time)
 bash scripts/setup.sh
 
-# 2. Run simulation + analysis
-bash scripts/run_ecmp.sh
+# 2. Run ECMP vs Hedera comparison (same workload, side-by-side results)
+bash scripts/run_comparison.sh
 ```
 
-Results are written to `results/`.
+## Scripts
+
+All scripts share common setup logic via `scripts/ns3-common.sh`, which handles patch application and ns-3 builds. Each script copies its simulation file to ns-3 scratch, ensures the combined patch is applied, builds, runs, and analyzes.
+
+| Script | Description | Usage |
+|--------|-------------|-------|
+| `scripts/setup.sh` | One-time setup: install ns-3.43, apply patch, install Python deps | `bash scripts/setup.sh` |
+| `scripts/ns3-common.sh` | Shared functions sourced by all run scripts (not run directly) | — |
+| `scripts/run_ecmp.sh` | ECMP simulation (2 elephants + 8 mice, 12s) | `bash scripts/run_ecmp.sh [ecmpMode]` |
+| `scripts/run_ecmp_scaled.sh` | Scaled ECMP simulation (52 flows) | `bash scripts/run_ecmp_scaled.sh [ecmpMode]` |
+| `scripts/run_hedera.sh` | Hedera simulation (6 elephants + 8 mice, 15s) | `bash scripts/run_hedera.sh [enableHedera]` |
+| `scripts/run_comparison.sh` | Run ECMP-only and Hedera back-to-back with identical workload | `bash scripts/run_comparison.sh` |
+
+### `run_ecmp.sh` — ECMP Simulation
+
+Runs the basic ECMP simulation with 2 elephant flows and 8 mice flows.
+
+```bash
+bash scripts/run_ecmp.sh        # default: per-flow hash (mode 2)
+bash scripts/run_ecmp.sh 0      # single-path (no ECMP)
+bash scripts/run_ecmp.sh 1      # random per-packet
+bash scripts/run_ecmp.sh 2      # per-flow hash
+```
+
+- **Simulation**: `ns3-scratch/ecmp-leaf-spine.cc`
+- **Analysis**: `analysis/metrics.py`
+- **Results**: `results-ecmp/`
+
+### `run_ecmp_scaled.sh` — Scaled ECMP Simulation
+
+Runs a larger ECMP simulation with 52 flows to demonstrate hash distribution effects at scale.
+
+```bash
+bash scripts/run_ecmp_scaled.sh      # default: per-flow hash (mode 2)
+bash scripts/run_ecmp_scaled.sh 0    # single-path
+```
+
+- **Simulation**: `ns3-scratch/ecmp-leaf-spine-scaled.cc`
+- **Analysis**: `analysis/metrics.py`
+- **Results**: `results-ecmp-scaled/`
+
+### `run_hedera.sh` — Hedera Simulation
+
+Runs the Hedera simulation with 6 elephant flows and 8 mice flows. A centralized controller periodically detects elephants (>1 MB) and reroutes them using Global First Fit to balance spine utilization.
+
+```bash
+bash scripts/run_hedera.sh       # default: Hedera enabled
+bash scripts/run_hedera.sh 1     # Hedera enabled (same as default)
+bash scripts/run_hedera.sh 0     # ECMP-only baseline (controller disabled)
+```
+
+- **Simulation**: `ns3-scratch/hedera-leaf-spine.cc`
+- **Analysis**: `analysis/metrics_hedera.py`
+- **Results**: `results-hedera/`
+
+### `run_comparison.sh` — ECMP vs Hedera Comparison
+
+Runs both modes back-to-back using the **same simulation file** (`hedera-leaf-spine.cc`) with identical topology and traffic. The only difference is whether the Hedera controller is enabled. This ensures a fair comparison.
+
+```bash
+bash scripts/run_comparison.sh
+```
+
+- Builds ns-3 once, then runs two simulations sequentially
+- **ECMP baseline** (`enableHedera=0`) → `results-comparison/ecmp/`
+- **Hedera** (`enableHedera=1`) → `results-comparison/hedera/`
+
+Both directories contain the same output files, making it easy to compare metrics side by side.
+
+## Traffic Patterns
+
+### ECMP Simulation (2 elephants + 8 mice)
+
+| Flow | Source | Destination | Port | Size | Start |
+|------|--------|-------------|------|------|-------|
+| E1 | host0 (leaf0) | host4 (leaf2) | 9 | 100 MB | 0.5s |
+| E2 | host1 (leaf0) | host6 (leaf3) | 9 | 100 MB | 0.5s |
+| M1-M8 | various | various | 11-18 | 100 KB | 1.0-1.2s |
+
+### Hedera / Comparison Simulation (6 elephants + 8 mice)
+
+| Flow | Source | Destination | Port | Size | Start |
+|------|--------|-------------|------|------|-------|
+| E1 | host0 (leaf0) | host4 (leaf2) | 9001 | 100 MB | 0.5s |
+| E2 | host0 (leaf0) | host5 (leaf2) | 9002 | 100 MB | 0.5s |
+| E3 | host1 (leaf0) | host6 (leaf3) | 9003 | 100 MB | 0.5s |
+| E4 | host1 (leaf0) | host7 (leaf3) | 9004 | 100 MB | 0.5s |
+| E5 | host2 (leaf1) | host4 (leaf2) | 9005 | 100 MB | 0.5s |
+| E6 | host3 (leaf1) | host7 (leaf3) | 9006 | 100 MB | 0.5s |
+| M1-M8 | various | various | 11-18 | 100 KB | 1.0-1.2s |
+
+With 6 elephants on 2 spines, pigeonhole guarantees at least 4 on one spine under ECMP. Hedera's Global First Fit should achieve a 3-3 split.
+
+All flows use TCP (Cubic, MSS=1448) via `BulkSendApplication`.
 
 ## Simulation Parameters
 
-### Command-Line Arguments
-
-Pass these to the ns-3 simulation via `run_ecmp.sh` or directly:
+### ECMP Parameters (`ecmp-leaf-spine.cc`)
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--ecmpMode` | `2` | ECMP routing mode (see below) |
-| `--outputDir` | `results` | Directory for output files (must exist) |
+| `--ecmpMode` | `2` | ECMP routing mode: 0=none, 1=random, 2=flow-hash |
+| `--outputDir` | `results-ecmp` | Output directory |
 
-### ECMP Modes (`--ecmpMode`)
+### Hedera Parameters (`hedera-leaf-spine.cc`)
 
-| Value | Mode | Behavior |
-|-------|------|----------|
-| `0` | None | Single path — all flows use the first available route. Worst-case baseline. |
-| `1` | Random | Per-packet random — each packet independently picks a random equal-cost route. Can cause packet reordering. |
-| `2` | Flow-hash | Per-flow hash — packets from the same 5-tuple always follow the same path. Different flows may use different paths. **Default.** |
-
-To compare modes:
-
-```bash
-bash scripts/run_ecmp.sh 0   # single-path baseline
-bash scripts/run_ecmp.sh 1   # random per-packet
-bash scripts/run_ecmp.sh 2   # per-flow hash (default)
-```
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--enableHedera` | `1` | 0=ECMP-only baseline, 1=Hedera controller enabled |
+| `--hederaEpoch` | `2.0` | Controller polling interval in seconds |
+| `--elephantThreshold` | `1048576` | Elephant detection threshold in bytes (1 MB) |
+| `--outputDir` | `results-hedera` | Output directory |
 
 ### How Flow-Hash ECMP Works
 
-The per-flow hash patch (`patches/ecmp-flow-hash.patch`) modifies ns-3's `Ipv4GlobalRouting` to:
+The patch (`patches/hedera-override.patch`) modifies ns-3's `Ipv4GlobalRouting` to:
 
 1. Extract the **5-tuple** from each packet: source IP, destination IP, protocol, source port, destination port
 2. Compute an asymmetric hash: `srcIP * 2654435761 ^ dstIP * 2246822519 ^ (protocol << 16) ^ (srcPort << 8) ^ dstPort`
-3. Select route index: `hash % num_equal_cost_routes`
+3. Check the **flow override table** — if the controller has placed this flow, use the assigned spine
+4. Otherwise select route index: `hash % num_equal_cost_routes`
 
-This ensures all packets in a flow take the same spine, while different flows may take different spines. The asymmetric hash means forward and reverse flows (A->B vs B->A) can be assigned to different paths.
+### How Hedera Works
 
-### Simulation Variables and What They Affect
+The Hedera controller runs as a periodic callback inside the simulation:
 
-| Variable | Location | Value | Effect |
-|----------|----------|-------|--------|
-| Host-Leaf bandwidth | `ecmp-leaf-spine.cc` | 1 Gbps | Access link capacity; bottleneck for individual flows |
-| Leaf-Spine bandwidth | `ecmp-leaf-spine.cc` | 10 Gbps | Fabric link capacity; shared by all flows traversing that spine |
-| Link delay | `ecmp-leaf-spine.cc` | 5 us | Propagation delay per hop; affects RTT and TCP ramp-up |
-| Elephant size | `ecmp-leaf-spine.cc` | 100 MB | Large enough to saturate links and create congestion |
-| Mouse size | `ecmp-leaf-spine.cc` | 100 KB | Small transfers sensitive to queuing delay from elephants |
-| TCP variant | `ecmp-leaf-spine.cc` | Cubic | Congestion control algorithm; affects throughput dynamics |
-| TCP MSS | `ecmp-leaf-spine.cc` | 1448 B | Maximum segment size; standard for 1500B MTU |
-| Simulation duration | `ecmp-leaf-spine.cc` | 12 s | Must be long enough for 100 MB elephants to complete at 1 Gbps (~0.8s) |
-| Elephant threshold | `metrics.py` | 1 MB | Flows with `txBytes > 1MB` classified as elephant; below as mouse |
+1. **Detect**: Every epoch (2s), read FlowMonitor stats and identify flows exceeding the elephant threshold (1 MB)
+2. **Sort**: Rank detected elephants by throughput rate (bytes/sec) in descending order
+3. **Place**: Global First Fit — assign each elephant to the least-loaded spine
+4. **Override**: Call `Ipv4GlobalRouting::SetFlowOverride(hash, spineIdx)` to reroute the flow
+
+Default traffic still uses ECMP mode 2 (per-flow hash). Only detected elephants get overridden.
 
 ## Environment Variables
 
-| Variable | Default | Used by | Description |
-|----------|---------|---------|-------------|
-| `NS3_DIR` | `$HOME/ns-3` | `setup.sh`, `run_ecmp.sh` | Path to ns-3 installation directory |
-
-Example:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NS3_DIR` | `$HOME/ns-3` | Path to ns-3 installation directory |
 
 ```bash
 NS3_DIR=/opt/ns-3 bash scripts/setup.sh
-NS3_DIR=/opt/ns-3 bash scripts/run_ecmp.sh
+NS3_DIR=/opt/ns-3 bash scripts/run_comparison.sh
 ```
 
 ## Output Files
 
-After running the simulation, the `results/` directory contains:
+### ECMP (`results-ecmp/`)
 
-| File | Format | Description |
-|------|--------|-------------|
-| `flowmon-ecmp.xml` | XML | ns-3 FlowMonitor output with per-flow byte/packet counts, timestamps, delays |
-| `spine-trace.csv` | CSV | Per-packet log of which spine each packet traversed (timestamp, 5-tuple, spine ID) |
-| `routing-tables.txt` | Text | Full routing table dump from all nodes at t=0.4s for debugging |
-| `ecmp-metrics.png` | PNG | Bar charts: mice FCT, elephant throughput, path distribution across spines |
+| File | Description |
+|------|-------------|
+| `flowmon-ecmp.xml` | FlowMonitor per-flow stats (bytes, packets, timestamps, delays) |
+| `spine-trace.csv` | Per-packet spine traversal log (timestamp, 5-tuple, spine ID) |
+| `routing-tables.txt` | Routing table dump from all nodes at t=0.4s |
+| `ecmp-metrics.png` | Bar charts: mice FCT, elephant throughput, path distribution |
 
-### Metrics Computed by `analysis/metrics.py`
+### Hedera (`results-hedera/` or `results-comparison/{ecmp,hedera}/`)
+
+| File | Description |
+|------|-------------|
+| `flowmon-hedera.xml` | FlowMonitor per-flow stats |
+| `spine-trace.csv` | Per-packet spine traversal log |
+| `hedera-controller.csv` | Controller decisions: epoch, flow, old/new spine, rate (Hedera mode only) |
+| `routing-tables.txt` | Routing table dump |
+| `hedera-metrics.png` | 4-panel plot: elephant throughput, mice FCT, path distribution, reroute timeline |
+
+### Metrics
 
 | Metric | Formula | What it shows |
 |--------|---------|---------------|
@@ -162,16 +226,29 @@ After running the simulation, the `results/` directory contains:
 ```
 CS476-Load-Balancing-Schedulers/
 ├── ns3-scratch/
-│   └── ecmp-leaf-spine.cc          # Main simulation (~280 lines C++)
+│   ├── ecmp-leaf-spine.cc             # ECMP simulation (2 elephants + 8 mice)
+│   ├── ecmp-leaf-spine-scaled.cc      # Scaled ECMP simulation (52 flows)
+│   └── hedera-leaf-spine.cc           # Hedera simulation (6 elephants + 8 mice)
 ├── patches/
-│   └── ecmp-flow-hash.patch        # Per-flow ECMP patch for ns-3
+│   ├── ecmp-flow-hash.patch           # Original ECMP-only patch (superseded)
+│   └── hedera-override.patch          # Combined ECMP + Hedera override patch
 ├── analysis/
-│   └── metrics.py                  # Parse FlowMonitor XML → stats + plots
-├── results/                        # Output directory (gitignored)
+│   ├── metrics.py                     # ECMP analysis: parse FlowMonitor → stats + plots
+│   └── metrics_hedera.py             # Hedera analysis: adds controller log + 4-panel plots
 ├── scripts/
-│   ├── setup.sh                    # Install ns-3 + dependencies + apply patch
-│   └── run_ecmp.sh                 # Build, run simulation, run analysis
-├── requirements.txt                # Python dependencies (pandas, matplotlib)
+│   ├── setup.sh                       # One-time: install ns-3, apply patch, install deps
+│   ├── ns3-common.sh                  # Shared functions (patch, build, copy)
+│   ├── run_ecmp.sh                    # Run ECMP simulation
+│   ├── run_ecmp_scaled.sh             # Run scaled ECMP simulation
+│   ├── run_hedera.sh                  # Run Hedera simulation
+│   └── run_comparison.sh              # Run ECMP vs Hedera side-by-side
+├── results-ecmp/                      # ECMP output (gitignored)
+├── results-ecmp-scaled/               # Scaled ECMP output (gitignored)
+├── results-hedera/                    # Hedera output (gitignored)
+├── results-comparison/                # Comparison output (gitignored)
+│   ├── ecmp/                          #   ECMP-only baseline
+│   └── hedera/                        #   Hedera with controller
+├── requirements.txt
 ├── .gitignore
 └── README.md
 ```
@@ -185,4 +262,5 @@ CS476-Load-Balancing-Schedulers/
 | ns-3 build fails after patch | Check patch applied cleanly: `cd $NS3_DIR && git diff` |
 | Simulation produces empty XML | Ensure `--outputDir` points to an existing directory |
 | All flows on one spine | Verify `--ecmpMode=2` is set and patch is applied |
-| FlowMonitor shows many tiny flows | ACK-only reverse flows are expected; `metrics.py` filters them out (`txBytes < 10KB`) |
+| FlowMonitor shows many tiny flows | ACK-only reverse flows are expected; analysis scripts filter them out |
+| Old ECMP-only patch applied | `run_*.sh` scripts auto-detect and upgrade to combined patch |

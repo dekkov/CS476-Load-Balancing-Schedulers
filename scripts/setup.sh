@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup.sh — Install ns-3.43 and dependencies for ECMP simulation
+# setup.sh — Install ns-3.43 and dependencies for ECMP/Hedera simulations
 set -euo pipefail
 
 NS3_DIR="${NS3_DIR:-$HOME/ns-3}"
@@ -27,10 +27,10 @@ echo "=== Step 4: Build ns-3 ==="
 echo "=== Step 5: Verify ns-3 ==="
 ./ns3 run hello-simulator
 
-echo "=== Step 6: Apply per-flow ECMP patch ==="
+echo "=== Step 6: Apply combined ECMP + Hedera patch ==="
 if git diff --quiet HEAD 2>/dev/null; then
-    echo "Applying ECMP flow-hash patch..."
-    git apply "$PATCH_DIR/ecmp-flow-hash.patch"
+    echo "Applying combined patch (ECMP flow-hash + Hedera override)..."
+    git apply "$PATCH_DIR/hedera-override.patch"
     echo "Rebuilding ns-3 with patch..."
     ./ns3 build
 else
