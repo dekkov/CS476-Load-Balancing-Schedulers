@@ -1,0 +1,170 @@
+diff --git a/src/internet/model/ipv4-global-routing.h b/src/internet/model/ipv4-global-routing.h
+--- a/src/internet/model/ipv4-global-routing.h
++++ b/src/internet/model/ipv4-global-routing.h
+@@ -21,6 +21,8 @@
+ #define IPV4_GLOBAL_ROUTING_H
+
+ #include "ns3/ipv4-routing-protocol.h"
++#include "ns3/boolean.h"
++#include "ns3/ipv4-header.h"
+
+ #include <list>
+ #include <stdint.h>
+@@ -167,7 +169,9 @@ class Ipv4GlobalRouting : public Ipv4RoutingProtocol
+      * \param oif output interface if specific (put nullptr otherwise)
+      * \return a valid Ipv4Route
+      */
+-    Ptr<Ipv4Route> LookupGlobal(Ipv4Address dest, Ptr<NetDevice> oif = nullptr);
++    Ptr<Ipv4Route> LookupGlobal(Ipv4Address dest,
++                                 Ptr<const Packet> p = nullptr,
++                                 const Ipv4Header* header = nullptr,
++                                 Ptr<NetDevice> oif = nullptr);
+
+     HostRoutes m_hostRoutes;             //!< Routes to hosts
+     NetworkRoutes m_networkRoutes;       //!< Routes to networks
+@@ -175,6 +179,7 @@ class Ipv4GlobalRouting : public Ipv4RoutingProtocol
+     bool m_randomEcmpRouting;            //!< Set to true if random ECMP routing is enabled
+     bool m_respondToInterfaceEvents;     //!< Flag for events
+     Ptr<Ipv4> m_ipv4;                    //!< associated IPv4 instance
++    bool m_flowEcmpRouting;              //!< Enable per-flow ECMP based on 5-tuple hash
+ };
+
+ } // namespace ns3
+diff --git a/src/internet/model/ipv4-global-routing.cc b/src/internet/model/ipv4-global-routing.cc
+--- a/src/internet/model/ipv4-global-routing.cc
++++ b/src/internet/model/ipv4-global-routing.cc
+@@ -22,6 +22,9 @@
+ #include "ipv4-global-routing.h"
+
+ #include "ns3/boolean.h"
++#include "ns3/ipv4-header.h"
++#include "ns3/tcp-header.h"
++#include "ns3/udp-header.h"
+ #include "ns3/log.h"
+ #include "ns3/names.h"
+ #include "ns3/net-device.h"
+@@ -57,6 +60,11 @@ Ipv4GlobalRouting::GetTypeId()
+                           BooleanValue(false),
+                           MakeBooleanAccessor(&Ipv4GlobalRouting::m_respondToInterfaceEvents),
+                           MakeBooleanChecker())
++            .AddAttribute("FlowEcmpRouting",
++                          "Enable per-flow ECMP routing using 5-tuple hash",
++                          BooleanValue(false),
++                          MakeBooleanAccessor(&Ipv4GlobalRouting::m_flowEcmpRouting),
++                          MakeBooleanChecker())
+             .AddAttribute("RandomEcmpRouting",
+                           "Set to true if packets are randomly routed among ECMP; set to false for "
+                           "using only one route consistently",
+@@ -68,6 +76,7 @@ Ipv4GlobalRouting::GetTypeId()
+
+ Ipv4GlobalRouting::Ipv4GlobalRouting()
+     : m_randomEcmpRouting(false),
++      m_flowEcmpRouting(false),
+       m_respondToInterfaceEvents(false)
+ {
+     NS_LOG_FUNCTION(this);
+@@ -82,7 +91,10 @@ Ipv4GlobalRouting::~Ipv4GlobalRouting()
+ }
+
+ Ptr<Ipv4Route>
+-Ipv4GlobalRouting::LookupGlobal(Ipv4Address dest, Ptr<NetDevice> oif)
++Ipv4GlobalRouting::LookupGlobal(Ipv4Address dest,
++                                 Ptr<const Packet> p,
++                                 const Ipv4Header* header,
++                                 Ptr<NetDevice> oif)
+ {
+     NS_LOG_FUNCTION(this << dest << oif);
+     NS_LOG_LOGIC("Looking for route for destination " << dest);
+@@ -112,7 +124,48 @@ Ipv4GlobalRouting::LookupGlobal(Ipv4Address dest, Ptr<NetDevice> oif)
+             }
+         }
+
+-        if (m_randomEcmpRouting)
++        if (m_flowEcmpRouting && allRoutes.size() > 1)
++        {
++            // Per-flow ECMP: hash on 5-tuple (srcIP, dstIP, protocol, srcPort, dstPort)
++            uint32_t srcAddr = 0;
++            uint32_t dstAddr = dest.Get();
++            uint8_t protocol = 0;
++            uint16_t srcPort = 0;
++            uint16_t dstPort = 0;
++
++            if (header)
++            {
++                if (header->GetSource() != Ipv4Address("0.0.0.0"))
++                {
++                    srcAddr = header->GetSource().Get();
++                }
++                protocol = header->GetProtocol();
++            }
++
++            if (p)
++            {
++                Ptr<Packet> copy = p->Copy();
++                if (protocol == 6) // TCP
++                {
++                    TcpHeader tcpHeader;
++                    if (copy->PeekHeader(tcpHeader))
++                    {
++                        srcPort = tcpHeader.GetSourcePort();
++                        dstPort = tcpHeader.GetDestinationPort();
++                    }
++                }
++                else if (protocol == 17) // UDP
++                {
++                    UdpHeader udpHeader;
++                    if (copy->PeekHeader(udpHeader))
++                    {
++                        srcPort = udpHeader.GetSourcePort();
++                        dstPort = udpHeader.GetDestinationPort();
++                    }
++                }
++            }
++
++            // Asymmetric hash to differentiate forward/reverse flows
++            uint32_t hash = srcAddr * 2654435761u
++                            ^ dstAddr * 2246822519u
++                            ^ (static_cast<uint32_t>(protocol) << 16)
++                            ^ (static_cast<uint32_t>(srcPort) << 8)
++                            ^ static_cast<uint32_t>(dstPort);
++
++            uint32_t selectedRoute = hash % allRoutes.size();
++            Ipv4RoutingTableEntry* route = allRoutes[selectedRoute];
++            uint32_t interfaceIdx = route->GetInterface();
++            rtentry = Create<Ipv4Route>();
++            rtentry->SetDestination(route->GetDest());
++            rtentry->SetSource(m_ipv4->SourceAddressSelection(interfaceIdx, route->GetDest()));
++            rtentry->SetGateway(route->GetGateway());
++            rtentry->SetOutputDevice(m_ipv4->GetNetDevice(interfaceIdx));
++        }
++        else if (m_randomEcmpRouting)
+         {
+             NS_LOG_LOGIC("RandomEcmpRouting enabled, choosing random route");
+             uint32_t selectIndex =
+@@ -153,7 +206,7 @@ Ipv4GlobalRouting::RouteOutput(Ptr<Packet> p,
+     // See if this is a multicast packet and have a route for it.
+     if (destination.IsMulticast())
+     {
+-        // ...existing multicast code...
++        // ...existing multicast code unchanged...
+     }
+
+     // See if this is a unicast packet and have a route for it.
+@@ -161,7 +214,7 @@ Ipv4GlobalRouting::RouteOutput(Ptr<Packet> p,
+     {
+         NS_LOG_LOGIC("Unicast destination- looking up global route");
+         // Note: oif may be null; LookupGlobal handles that
+-        Ptr<Ipv4Route> rtentry = LookupGlobal(header.GetDestination(), oif);
++        Ptr<Ipv4Route> rtentry = LookupGlobal(header.GetDestination(), p, &header, oif);
+         if (rtentry)
+         {
+             sockerr = Socket::ERROR_NOTERROR;
+@@ -212,7 +265,7 @@ Ipv4GlobalRouting::RouteInput(Ptr<const Packet> p,
+         }
+     }
+     // Unicast delivery
+-    rtentry = LookupGlobal(header.GetDestination());
++    rtentry = LookupGlobal(header.GetDestination(), p, &header);
+     if (rtentry)
+     {
+         NS_LOG_LOGIC("Found unicast destination - calling unicast callback");
