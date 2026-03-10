@@ -119,8 +119,8 @@ static Ptr<Ipv4FlowClassifier> g_classifier;
 static uint32_t g_numSpines = 2;
 static std::map<uint32_t, uint64_t> g_prevFlowBytes; // hash -> bytes at last epoch
 static std::ofstream g_controllerLog;
-static double g_hederaEpoch = 2.0;
-static uint64_t g_elephantThreshold = 1 * 1024 * 1024; // 1 MB detection threshold
+static double g_hederaEpoch = 1.0;
+static uint64_t g_elephantThreshold = 10 * 1024 * 1024; // 10 MB detection threshold
 
 // ---------- Hedera Controller Epoch ----------
 
@@ -259,8 +259,8 @@ main(int argc, char* argv[])
 {
     // --- Command-line arguments ---
     uint32_t enableHedera = 1; // 0=ECMP-only baseline, 1=Hedera
-    double hederaEpoch = 2.0;
-    uint64_t elephantThreshold = 1 * 1024 * 1024; // 1 MB
+    double hederaEpoch = 1.0;
+    uint64_t elephantThreshold = 10 * 1024 * 1024; // 10 MB
     std::string outputDir = "results-hedera";
 
     CommandLine cmd;
@@ -305,7 +305,7 @@ main(int argc, char* argv[])
     hostLeafLink.SetChannelAttribute("Delay", StringValue("5us"));
 
     PointToPointHelper leafSpineLink;
-    leafSpineLink.SetDeviceAttribute("DataRate", StringValue("10Gbps"));
+    leafSpineLink.SetDeviceAttribute("DataRate", StringValue("1Gbps"));
     leafSpineLink.SetChannelAttribute("Delay", StringValue("5us"));
 
     Ipv4AddressHelper address;
@@ -366,21 +366,23 @@ main(int argc, char* argv[])
         hostAddr[i] = hostLeafInterfaces[i].GetAddress(0);
     }
 
-    // --- 6 Elephant flows: 100 MB each, start at 0.5s ---
-    uint32_t elephantBytes = 100 * 1024 * 1024; // 100 MB
+    // --- 6 Elephant flows: 500 MB each, start at 0.5s ---
+    // All-odd destination ports force all 6 flows to hash to spine 1 under ECMP,
+    // creating a 6-0 collision. Hedera redistributes to 3-3.
+    uint32_t elephantBytes = 500 * 1024 * 1024; // 500 MB
 
     // E1: host0 (leaf0) -> host4 (leaf2), port 9001
     InstallFlow(hosts.Get(0), hosts.Get(4), hostAddr[4], 9001, elephantBytes, 0.5);
-    // E2: host0 (leaf0) -> host5 (leaf2), port 9002
-    InstallFlow(hosts.Get(0), hosts.Get(5), hostAddr[5], 9002, elephantBytes, 0.5);
-    // E3: host1 (leaf0) -> host6 (leaf3), port 9003
-    InstallFlow(hosts.Get(1), hosts.Get(6), hostAddr[6], 9003, elephantBytes, 0.5);
-    // E4: host1 (leaf0) -> host7 (leaf3), port 9004
-    InstallFlow(hosts.Get(1), hosts.Get(7), hostAddr[7], 9004, elephantBytes, 0.5);
-    // E5: host2 (leaf1) -> host4 (leaf2), port 9005
-    InstallFlow(hosts.Get(2), hosts.Get(4), hostAddr[4], 9005, elephantBytes, 0.5);
-    // E6: host3 (leaf1) -> host7 (leaf3), port 9006
-    InstallFlow(hosts.Get(3), hosts.Get(7), hostAddr[7], 9006, elephantBytes, 0.5);
+    // E2: host0 (leaf0) -> host5 (leaf2), port 9003
+    InstallFlow(hosts.Get(0), hosts.Get(5), hostAddr[5], 9003, elephantBytes, 0.5);
+    // E3: host1 (leaf0) -> host6 (leaf3), port 9005
+    InstallFlow(hosts.Get(1), hosts.Get(6), hostAddr[6], 9005, elephantBytes, 0.5);
+    // E4: host1 (leaf0) -> host7 (leaf3), port 9007
+    InstallFlow(hosts.Get(1), hosts.Get(7), hostAddr[7], 9007, elephantBytes, 0.5);
+    // E5: host2 (leaf1) -> host4 (leaf2), port 9009
+    InstallFlow(hosts.Get(2), hosts.Get(4), hostAddr[4], 9009, elephantBytes, 0.5);
+    // E6: host3 (leaf1) -> host7 (leaf3), port 9011
+    InstallFlow(hosts.Get(3), hosts.Get(7), hostAddr[7], 9011, elephantBytes, 0.5);
 
     // --- 8 Mice flows: 100 KB each ---
     uint32_t mouseBytes = 100 * 1024; // 100 KB
@@ -440,7 +442,7 @@ main(int argc, char* argv[])
 
     // ========== RUN ==========
 
-    Simulator::Stop(Seconds(15.0));
+    Simulator::Stop(Seconds(30.0));
     Simulator::Run();
 
     // --- Save FlowMonitor results ---
