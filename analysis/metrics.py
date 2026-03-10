@@ -207,17 +207,19 @@ def analyze_spine_trace(results_dir):
 
 def generate_plots(mice, elephants, spine_df, results_dir):
     """Generate bar charts for FCT, throughput, and path distribution."""
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
     # Plot 1: Mice FCT
     if not mice.empty:
         fcts = mice["fct_s"] * 1000
         ax = axes[0]
-        labels = [f"F{fid}" for fid in mice["flowId"]]
-        ax.bar(labels, fcts.values)
+        x = range(len(fcts))
+        ax.bar(x, fcts.values)
         ax.set_ylabel("FCT (ms)")
+        ax.set_xlabel("Flow index (sorted by flow ID)")
         ax.set_title("Mice Flow Completion Times")
-        ax.tick_params(axis="x", rotation=45)
+        ax.set_xticks([])  # too many bars for individual labels
+        ax.set_title(f"Mice Flow Completion Times (n={len(mice)})")
     else:
         axes[0].text(0.5, 0.5, "No mice flows", ha="center", va="center")
         axes[0].set_title("Mice FCT")
@@ -228,7 +230,7 @@ def generate_plots(mice, elephants, spine_df, results_dir):
         labels = [f"F{fid}" for fid in elephants["flowId"]]
         ax.bar(labels, elephants["throughput_mbps"].values)
         ax.set_ylabel("Throughput (Mbps)")
-        ax.set_title("Elephant Throughput")
+        ax.set_title(f"Elephant Throughput (n={len(elephants)})")
     else:
         axes[1].text(0.5, 0.5, "No elephant flows", ha="center", va="center")
         axes[1].set_title("Elephant Throughput")
@@ -236,17 +238,21 @@ def generate_plots(mice, elephants, spine_df, results_dir):
     # Plot 3: Path distribution
     if spine_df is not None and not spine_df.empty:
         ax = axes[2]
-        spine_counts = spine_df.groupby("spine_id").size()
+        max_spine = max(spine_df["spine_id"].max() + 1, 2)  # always show at least 2 spines
+        spine_counts = spine_df.groupby("spine_id").size().reindex(
+            range(max_spine), fill_value=0
+        )
+        total_pkts = spine_counts.sum()
         ax.bar([f"Spine {s}" for s in spine_counts.index], spine_counts.values)
         ax.set_ylabel("Packets")
-        ax.set_title("Path Distribution (Spine)")
+        ax.set_title(f"Path Distribution (Spine, {total_pkts:,} pkts)")
     else:
         axes[2].text(0.5, 0.5, "No spine trace", ha="center", va="center")
         axes[2].set_title("Path Distribution")
 
-    plt.tight_layout()
+    plt.tight_layout(pad=2.0)
     plot_path = os.path.join(results_dir, "ecmp-metrics.png")
-    plt.savefig(plot_path, dpi=150)
+    plt.savefig(plot_path, dpi=150, bbox_inches="tight")
     print(f"\nPlots saved to: {plot_path}")
     plt.close()
 
